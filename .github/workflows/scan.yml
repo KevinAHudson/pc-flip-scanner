@@ -22,7 +22,7 @@ jobs:
       - name: Scan
         env:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
-        run: python scanner.py
+        run: python -u scanner.py
       - name: Dashboard on run page
         if: always()
         run: test -f summary.md && cat summary.md >> "$GITHUB_STEP_SUMMARY" || echo "no summary" >> "$GITHUB_STEP_SUMMARY"
