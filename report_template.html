@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Flip Scanner</title>
+<style>
+:root{--bg:#0f1115;--card:#171a21;--line:#262b36;--fg:#e6e8ee;--mute:#8b93a7;--good:#3ecf8e;--ok:#e8b84a;--bad:#ef6b6b;--acc:#6ea8fe}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+header{padding:20px 16px 8px;max-width:1300px;margin:auto}h1{margin:0;font-size:20px}.sub{color:var(--mute);margin-top:4px}
+.bar{display:flex;flex-wrap:wrap;gap:8px;padding:8px 16px;max-width:1300px;margin:auto}
+.bar select,.bar input{background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:6px 8px}
+main{max-width:1300px;margin:auto;padding:0 16px 40px}
+h2{font-size:15px;margin:22px 0 8px;color:var(--acc)}
+.wrap{overflow-x:auto;border:1px solid var(--line);border-radius:8px}
+table{border-collapse:collapse;width:100%;min-width:900px}th,td{padding:7px 10px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}
+th{background:var(--card);color:var(--mute);font-weight:600;cursor:pointer;position:sticky;top:0}td.n{text-align:right;font-variant-numeric:tabular-nums}
+td.name{white-space:normal;min-width:320px}a{color:var(--fg)}a:hover{color:var(--acc)}
+.m{font-weight:700}.m.good{color:var(--good)}.m.ok{color:var(--ok)}.m.bad{color:var(--bad)}
+.tag{display:inline-block;font-size:11px;padding:1px 6px;border-radius:4px;background:#2a2f3b;color:var(--mute);margin-right:4px}
+.warn{background:#3a2a12;border:1px solid #6b4b16;color:#f3d29a;padding:8px 12px;border-radius:6px;margin:10px 0}
+details{color:var(--mute);margin-top:24px}pre{white-space:pre-wrap}
+</style></head><body>
+<header><h1>Micro Center flip scanner</h1><div class="sub" id="sub"></div></header>
+<div class="bar">
+  <select id="store"><option value="">All stores</option></select>
+  <select id="tier"><option value="">All GPUs</option></select>
+  <label style="color:var(--mute);align-self:center">Min margin <input id="min" type="number" value="-99999" step="100" style="width:90px"></label>
+</div>
+<main id="out"></main>
+<script>
+const D = __DATA__;
+const $ = s => document.querySelector(s), f = v => v==null ? '—' : '$' + Math.round(v).toLocaleString();
+$('#sub').textContent = `${D.meta.run_at} · ${D.rows.length} confirmed in-stock · ${D.meta.dropped} dropped (out of stock / unconfirmed) · alert ≥ ${f(D.threshold)}`;
+const tiers = ["RTX 5090","RTX 4090","RTX 5080","RTX 4080 SUPER","RTX 4080","RTX 5070 Ti","RX 9070 XT","RTX 4070 Ti SUPER","RX 7900 XTX","RTX 5070","RX 9070","RTX 5060 Ti","RX 9060 XT","RTX 5060",null];
+for (const [id,s] of Object.entries(D.meta.stores)) $('#store').insertAdjacentHTML('beforeend',`<option value="${id}">${s.name}</option>`);
+for (const t of tiers) if (D.rows.some(r=>r.gpu===t)) $('#tier').insertAdjacentHTML('beforeend',`<option value="${t??''}">${t??'Unparsed GPU'}</option>`);
+let sortKey='margin', sortDir=-1;
+function render(){
+  const st=$('#store').value, ti=$('#tier').value, min=+$('#min').value;
+  let rows=D.rows.filter(r=>(!st||r.store_id===st)&&(!ti||(r.gpu||'')===ti)&&r.margin>=min);
+  rows.sort((a,b)=>((a[sortKey]??-1e9)>(b[sortKey]??-1e9)?1:-1)*sortDir);
+  let h='';
+  for (const w of D.meta.blocked) h+=`<div class="warn">⚠ ${w}</div>`;
+  const groups = ti ? [[ti,rows]] : tiers.map(t=>[t,rows.filter(r=>r.gpu===t)]).filter(g=>g[1].length);
+  if(!rows.length) h+='<p style="color:var(--mute)">No confirmed in-stock listings match.</p>';
+  for (const [t,g] of groups){
+    h+=`<h2>${t||'GPU not parsed'} · ${g.length}</h2><div class="wrap"><table><thead><tr>
+    <th data-k="margin">Margin</th><th data-k="price">Price</th><th data-k="cost_after_tax">After tax</th><th data-k="partout">Part-out</th>
+    <th data-k="open_box">Open box</th><th data-k="stock">Stock</th><th data-k="store">Store</th><th>PC</th><th>Part values</th></tr></thead><tbody>`;
+    for (const r of g){
+      const c = r.margin>=D.threshold?'good':r.margin>=0?'ok':'bad';
+      const p = r.parts, pv = `GPU ${f(p.gpu)} · CPU ${f(p.cpu)} · RAM ${f(p.ram)} · SSD ${f(p.ssd)} · rest ${f(p.board_psu_case_cooler)}`;
+      h+=`<tr><td class="n m ${c}">${f(r.margin)}</td><td class="n">${f(r.price)}</td><td class="n">${f(r.cost_after_tax)}</td><td class="n">${f(r.partout)}</td>
+      <td class="n">${f(r.open_box)}${r.margin_open_box!=null?`<br><small class="m ${r.margin_open_box>=D.threshold?'good':'ok'}">${f(r.margin_open_box)}</small>`:''}</td>
+      <td class="n">${r.stock>=25?'25+':r.stock}</td><td>${r.store}</td>
+      <td class="name"><a href="${r.url}?storeid=${r.store_id}" target="_blank" rel="noopener">${r.name}</a><br>
+      <span class="tag">${r.cpu||'cpu?'}</span><span class="tag">${r.ram_gb?r.ram_gb+'GB '+r.ram_type:'ram?'}</span><span class="tag">${r.ssd_tb?r.ssd_tb+'TB':'ssd?'}</span>${r.proprietary?'<span class="tag">proprietary</span>':''}${r.missing.length?'<span class="tag">unpriced: '+r.missing.join(',')+'</span>':''}</td>
+      <td><small style="color:var(--mute)">${pv}</small></td></tr>`;
+    }
+    h+='</tbody></table></div>';
+  }
+  h+=`<details><summary>Part resale values used (edit config.json)</summary><pre>${JSON.stringify(D.meta.part_resale,null,2)}</pre></details>`;
+  $('#out').innerHTML=h;
+  document.querySelectorAll('th[data-k]').forEach(th=>th.onclick=()=>{const k=th.dataset.k; sortDir = sortKey===k?-sortDir:-1; sortKey=k; render();});
+}
+['#store','#tier','#min'].forEach(s=>$(s).oninput=render); render();
+</script></body></html>

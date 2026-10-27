@@ -1,0 +1,76 @@
+{
+  "_readme": "Edit freely. Part values are what YOU think a pulled part sells for on FB Marketplace / Craigslist. Margin = part-out total - price*(1+tax).",
+  "stores": {
+    "175": {
+      "name": "Charlotte",
+      "tax": 0.0725
+    },
+    "081": {
+      "name": "Fairfax",
+      "tax": 0.06
+    }
+  },
+  "search_queries": [
+    "gaming pc",
+    "gaming desktop",
+    "powerspec"
+  ],
+  "max_pages_per_query": 6,
+  "min_profit_alert": 500,
+  "verify_product_pages": true,
+  "ntfy_topic": "kevin-flips-7a3955b1",
+  "part_resale": {
+    "gpu": {
+      "RTX 5090": 5000,
+      "RTX 5080": 1400,
+      "RTX 5070 Ti": 750,
+      "RTX 5070": 500,
+      "RTX 5060 Ti": 380,
+      "RTX 5060": 260,
+      "RTX 4090": 1800,
+      "RTX 4080 SUPER": 900,
+      "RTX 4080": 850,
+      "RTX 4070 Ti SUPER": 650,
+      "RX 9070 XT": 600,
+      "RX 9070": 500,
+      "RX 9060 XT": 300,
+      "RX 7900 XTX": 700
+    },
+    "cpu": {
+      "9950X3D": 600,
+      "9900X3D": 450,
+      "9800X3D": 400,
+      "7800X3D": 300,
+      "9950X": 450,
+      "9900X": 300,
+      "9700X": 230,
+      "9600X": 160,
+      "7700X": 180,
+      "7600X": 140,
+      "285K": 450,
+      "265K": 250,
+      "245K": 180,
+      "14900K": 350,
+      "14700K": 250,
+      "14700KF": 240,
+      "14600K": 180,
+      "13700K": 200
+    },
+    "ram_per_gb_ddr5": 13.3,
+    "ram_per_gb_ddr4": 4.0,
+    "ssd_per_tb": 90,
+    "board_psu_case_cooler": {
+      "standard": 340,
+      "proprietary": 100
+    },
+    "proprietary_brands": [
+      "Alienware",
+      "Dell",
+      "HP",
+      "OMEN",
+      "Lenovo",
+      "Legion",
+      "Acer"
+    ]
+  }
+}
