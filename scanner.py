@@ -159,7 +159,7 @@ async def new_context(browser, store_id):
 async def goto(page, url, tag):
     for attempt in range(3):
         try:
-            resp = await page.goto(url, wait_until="domcontentloaded", timeout=45000)
+            resp = await page.goto(url, wait_until="domcontentloaded", timeout=25000)
             await page.wait_for_timeout(1500 + random.randint(0, 1500))
             status = resp.status if resp else None
             if status and status >= 400:
@@ -184,7 +184,10 @@ async def scrape_store(browser, store_id):
             url = (f"{MC}/search/search_results.aspx?Ntt={quote_plus(q)}&Ntk=all&sortby=match"
                    f"&rpp=96&page={pg}&storeid={store_id}&myStore=true")
             st = await goto(page, url, f"search_{store_id}_{q.replace(' ','_')}_{pg}")
-            if st is None: blocked_pages += 1; break
+            if st is None:
+                blocked_pages += 1
+                if blocked_pages >= 2: print("  ! repeated failures, skipping rest of this store"); await ctx.close(); return found, blocked_pages
+                break
             tiles = await page.evaluate(TILE_JS)
             if pg == 1 and not tiles:
                 (DEBUG / f"empty_{store_id}_{q.replace(' ','_')}.html").write_text(await page.content())
@@ -299,6 +302,18 @@ async def main():
     rows, dropped, blocked = [], 0, []
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=["--disable-blink-features=AutomationControlled"])
+        # probe: one request up front so a block shows in seconds, not after 20 min of timeouts
+        ctx0 = await browser.new_context(); pg0 = await ctx0.new_page()
+        try:
+            r0 = await pg0.goto(MC + "/", wait_until="domcontentloaded", timeout=25000)
+            print(f"probe: HTTP {r0.status if r0 else '?'} title={await pg0.title()!r}")
+            (DEBUG / "probe.html").write_text(await pg0.content())
+            if r0 and r0.status >= 400:
+                print("NO DATA — Micro Center refused the probe request from this runner."); sys.exit(2)
+        except Exception as e:
+            print(f"NO DATA — probe failed: {type(e).__name__}: {e}"); sys.exit(2)
+        finally:
+            await ctx0.close()
         for store_id, st in CFG["stores"].items():
             print(f"== {st['name']} ({store_id})")
             found, nblocked = await scrape_store(browser, store_id)
