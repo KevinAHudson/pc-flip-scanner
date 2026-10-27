@@ -2,3 +2,4 @@ debug/
 __pycache__/
 .venv/
 scan.log
+.browser-profile/

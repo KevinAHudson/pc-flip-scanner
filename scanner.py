@@ -2,7 +2,8 @@
 """
 Micro Center prebuilt flip scanner.
 
-1. Loads Micro Center search results per store (headless Chromium).
+1. Loads Micro Center search results per store (your real Chrome, visible window,
+   saved profile in .browser-profile/ so the site sees the same browser every run).
 2. Extracts every desktop tile (name, price, open-box price, stock).
 3. Opens each in-stock product page to CONFIRM price + stock at that store.
    Anything that can't be confirmed is dropped.
@@ -22,8 +23,9 @@ DATA = ROOT / "data"; (DATA / "history").mkdir(parents=True, exist_ok=True)
 DEBUG = ROOT / "debug"; DEBUG.mkdir(exist_ok=True)
 
 MC = "https://www.microcenter.com"
-UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-      "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36")
+PROFILE = ROOT / ".browser-profile"
+HEADLESS = os.environ.get("HEADLESS") == "1"   # default: visible window
+CHALLENGE_TITLES = ("just a moment", "attention required", "access denied")
 
 # ---------- page extraction (runs in the browser) ----------
 # Finds every /product/<id>/ link, climbs to the largest ancestor that contains
@@ -148,20 +150,44 @@ def value_build(name, specs):
     return parts, sum(parts.values()), prop, missing
 
 # ---------- scraping ----------
-async def new_context(browser, store_id):
-    ctx = await browser.new_context(user_agent=UA, locale="en-US", viewport={"width": 1400, "height": 1000})
+async def set_store(ctx, store_id):
     await ctx.add_cookies([
         {"name": "storeSelected", "value": store_id, "domain": ".microcenter.com", "path": "/"},
         {"name": "myStore", "value": "true", "domain": ".microcenter.com", "path": "/"},
     ])
-    return ctx
+
+async def is_challenge(page):
+    try: title = (await page.title()).lower()
+    except Exception: return False
+    return any(t in title for t in CHALLENGE_TITLES)
+
+async def wait_out_challenge(page, tag):
+    """Cloudflare's 'Just a moment...' page clears itself in a normal browser within a few
+    seconds. Wait for that. If it turns into a checkbox it stays up; we pause and say so."""
+    for _ in range(30):
+        if not await is_challenge(page): return True
+        await page.wait_for_timeout(1000)
+    if HEADLESS: return False
+    print("  ⏸  Verification check is showing in the Chrome window. Press Tab until the")
+    print("     checkbox is focused, then Space. Waiting up to 3 minutes...", flush=True)
+    for _ in range(180):
+        if not await is_challenge(page): print("  ▶  cleared, continuing"); return True
+        await page.wait_for_timeout(1000)
+    (DEBUG / f"{tag}_challenge.html").write_text(await page.content())
+    return False
 
 async def goto(page, url, tag):
     for attempt in range(3):
         try:
             resp = await page.goto(url, wait_until="domcontentloaded", timeout=25000)
+            if await is_challenge(page):
+                if not await wait_out_challenge(page, tag):
+                    print(f"  ! stuck on verification page: {url}"); return None
+                await page.wait_for_load_state("domcontentloaded")
+                status = 200   # original response was the challenge; page has since reloaded
+            else:
+                status = resp.status if resp else None
             await page.wait_for_timeout(1500 + random.randint(0, 1500))
-            status = resp.status if resp else None
             if status and status >= 400:
                 (DEBUG / f"{tag}.html").write_text(await page.content())
                 print(f"  ! HTTP {status} on {url}")
@@ -173,9 +199,9 @@ async def goto(page, url, tag):
             await page.wait_for_timeout(4000)
     return None
 
-async def scrape_store(browser, store_id):
+async def scrape_store(ctx, store_id):
     store = CFG["stores"][store_id]
-    ctx = await new_context(browser, store_id)
+    await set_store(ctx, store_id)
     page = await ctx.new_page()
     found = {}
     blocked_pages = 0
@@ -186,7 +212,7 @@ async def scrape_store(browser, store_id):
             st = await goto(page, url, f"search_{store_id}_{q.replace(' ','_')}_{pg}")
             if st is None:
                 blocked_pages += 1
-                if blocked_pages >= 2: print("  ! repeated failures, skipping rest of this store"); await ctx.close(); return found, blocked_pages
+                if blocked_pages >= 2: print("  ! repeated failures, skipping rest of this store"); await page.close(); return found, blocked_pages
                 break
             tiles = await page.evaluate(TILE_JS)
             if pg == 1 and not tiles:
@@ -197,12 +223,11 @@ async def scrape_store(browser, store_id):
                 found[t["id"]] = t; new += 1
             print(f"  [{store['name']}] '{q}' p{pg}: {len(tiles)} tiles, {new} new desktops")
             if new == 0: break
-    await ctx.close()
+    await page.close()
     return found, blocked_pages
 
-async def verify(browser, store_id, item):
+async def verify(ctx, store_id, item):
     """Open the product page for this store; return (price, stock, open_box) or None if not confirmable."""
-    ctx = await new_context(browser, store_id)
     page = await ctx.new_page()
     try:
         st = await goto(page, f"{item['url']}?storeid={store_id}", f"product_{store_id}_{item['id']}")
@@ -236,7 +261,7 @@ async def verify(browser, store_id, item):
             return None   # page is showing a different store -> can't confirm
         return {"price": price, "stock": stock, "open_box": open_box, "title": info["title"]}
     finally:
-        await ctx.close()
+        await page.close()
 
 # ---------- reporting ----------
 TIERS = ["RTX 5090", "RTX 4090", "RTX 5080", "RTX 4080 SUPER", "RTX 4080", "RTX 5070 Ti", "RX 9070 XT",
@@ -301,22 +326,24 @@ async def main():
     run_at = dt.datetime.now(dt.timezone.utc).astimezone(dt.timezone(dt.timedelta(hours=-4))).strftime("%Y-%m-%d %H:%M ET")
     rows, dropped, blocked = [], 0, []
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True, args=["--disable-blink-features=AutomationControlled"])
-        # probe: one request up front so a block shows in seconds, not after 20 min of timeouts
-        ctx0 = await browser.new_context(); pg0 = await ctx0.new_page()
-        try:
-            r0 = await pg0.goto(MC + "/", wait_until="domcontentloaded", timeout=25000)
-            print(f"probe: HTTP {r0.status if r0 else '?'} title={await pg0.title()!r}")
-            (DEBUG / "probe.html").write_text(await pg0.content())
-            if r0 and r0.status >= 400:
-                print("NO DATA — Micro Center refused the probe request from this runner."); sys.exit(2)
+        opts = dict(headless=HEADLESS, locale="en-US", viewport={"width": 1400, "height": 1000})
+        try:   # your installed Google Chrome
+            ctx = await p.chromium.launch_persistent_context(str(PROFILE), channel="chrome", **opts)
         except Exception as e:
-            print(f"NO DATA — probe failed: {type(e).__name__}: {e}"); sys.exit(2)
-        finally:
-            await ctx0.close()
+            print(f"(Google Chrome not found, using bundled Chromium: {type(e).__name__})")
+            ctx = await p.chromium.launch_persistent_context(str(PROFILE), **opts)
+        # probe: one request up front so a block shows in seconds, not after 20 min of timeouts
+        pg0 = await ctx.new_page()
+        st0 = await goto(pg0, MC + "/", "probe")
+        print(f"probe: {st0} title={await pg0.title()!r}")
+        (DEBUG / "probe.html").write_text(await pg0.content())
+        await pg0.close()
+        if st0 is None:
+            await ctx.close()
+            print("NO DATA — couldn't get past Micro Center's verification page. See debug/probe.html."); sys.exit(2)
         for store_id, st in CFG["stores"].items():
             print(f"== {st['name']} ({store_id})")
-            found, nblocked = await scrape_store(browser, store_id)
+            found, nblocked = await scrape_store(ctx, store_id)
             if nblocked: blocked.append(f"{st['name']}: {nblocked} search page(s) failed")
             cands = []
             for t in found.values():
@@ -329,7 +356,7 @@ async def main():
             print(f"  {len(cands)} in-stock candidates from search tiles")
             for t, price, ob, stock in cands:
                 if CFG.get("verify_product_pages", True):
-                    v = await verify(browser, store_id, t)
+                    v = await verify(ctx, store_id, t)
                     if not v or not v["price"] or v["stock"] <= 0:
                         dropped += 1; print(f"  x dropped (not confirmed): {t['name'][:70]}"); continue
                     price, stock, ob = v["price"], v["stock"], v["open_box"] or ob
@@ -341,7 +368,7 @@ async def main():
                              **specs, "parts": parts, "partout": partout, "proprietary": prop,
                              "missing": missing, "cost_after_tax": cost, "margin": round(partout - cost),
                              "margin_open_box": round(partout - ob * (1 + st["tax"])) if ob else None})
-        await browser.close()
+        await ctx.close()
 
     prev_path = DATA / "latest.json"
     prev = {(r["store_id"], r["id"]): r for r in json.loads(prev_path.read_text())["rows"]} if prev_path.exists() else {}
