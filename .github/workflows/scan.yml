@@ -1,8 +1,5 @@
 name: Flip scan
 on:
-  schedule:
-    - cron: "17 11 * * *"   # 7:17 AM ET
-    - cron: "47 19 * * *"   # 3:47 PM ET
   workflow_dispatch: {}
 permissions:
   contents: write
